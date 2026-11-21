@@ -49,6 +49,7 @@ fun OnboardingScreen(onComplete: (UserProfile) -> Unit) {
     var companionName by remember { mutableStateOf("") }
     var personality by remember { mutableStateOf("") }
     var errors by remember { mutableStateOf<List<String>>(emptyList()) }
+    val packUi = rememberPackUiState()
 
     val age = ageText.toIntOrNull() ?: 0
     fun draft(companionOk: Boolean) = UserProfile(
@@ -127,16 +128,14 @@ fun OnboardingScreen(onComplete: (UserProfile) -> Unit) {
             }
             Step.DOWNLOAD -> {
                 Text("Her models", style = MaterialTheme.typography.headlineSmall)
-                Text("The app ships empty on purpose — her brain and voice download now, like game asset packs. Downloads are resumable, verified, and can also be managed later in Settings → Models.")
+                Text("The app ships empty on purpose — her brain and voice download like game asset packs: resumable and SHA-256 verified. Start the brain now, or later from the stage and Settings → Models.")
                 ModelPacks.ALL.forEach { pack ->
-                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text(pack.title, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "${pack.description} · ~${pack.approxSizeMb} MB" + if (pack.required) " · required" else " · optional",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    PackDownloadRow(
+                        pack = pack,
+                        status = packUi.status[pack.id] ?: ai.localcompanion.app.models.PackStatus.NOT_DOWNLOADED,
+                        progress = packUi.progress[pack.id] ?: 0f,
+                        onDownload = { packUi.download(pack) }
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 Button(

@@ -7,12 +7,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -85,7 +83,7 @@ fun SettingsSheet(
 
             SectionHeader("Models")
             ModelPacks.ALL.forEach { pack ->
-                PackRow(
+                PackDownloadRow(
                     pack = pack,
                     status = packStatus[pack.id] ?: PackStatus.NOT_DOWNLOADED,
                     progress = packProgress[pack.id] ?: 0f,
@@ -120,35 +118,3 @@ private fun SectionHeader(title: String) {
     )
 }
 
-@Composable
-private fun PackRow(
-    pack: ModelPack,
-    status: PackStatus,
-    progress: Float,
-    onDownload: () -> Unit
-) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(pack.title, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "${pack.description} · ~${pack.approxSizeMb} MB",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            when (status) {
-                PackStatus.READY -> Text("Ready ✓", color = MaterialTheme.colorScheme.primary)
-                PackStatus.DOWNLOADING -> Text("${(progress * 100).toInt()}%")
-                PackStatus.NOT_DOWNLOADED -> OutlinedButton(onClick = onDownload) { Text("Download") }
-            }
-        }
-        if (status == PackStatus.DOWNLOADING) {
-            Spacer(Modifier.height(6.dp))
-            androidx.compose.material3.LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-}

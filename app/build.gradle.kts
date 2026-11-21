@@ -54,6 +54,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+    // tar.bz2 extraction for model packs (pure Java, no native deps)
+    implementation("org.apache.commons:commons-compress:1.27.1")
 
     // On-device LLM: Liquid AI LEAP SDK (Maven Central, no token needed)
     implementation("ai.liquid.leap:leap-sdk:0.10.9")

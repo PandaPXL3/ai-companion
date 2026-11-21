@@ -53,6 +53,7 @@ fun StageScreen(
     var audioMode by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var volume by remember { mutableStateOf(0.8f) }
+    val packUi = rememberPackUiState()
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StageSurface(Modifier.fillMaxSize())
@@ -93,9 +94,9 @@ fun StageScreen(
                 onThemeModeChange = onThemeModeChange,
                 volume = volume,
                 onVolumeChange = { volume = it },
-                packStatus = emptyMap(),
-                packProgress = emptyMap(),
-                onDownloadPack = { /* TODO: wired by the downloader slice */ },
+                packStatus = packUi.status,
+                packProgress = packUi.progress,
+                onDownloadPack = packUi.download,
                 onResetOnboarding = { showSettings = false; onResetOnboarding() },
                 onDismiss = { showSettings = false }
             )
@@ -112,6 +113,16 @@ fun StageScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
+            val brainStatus = packUi.status[ai.localcompanion.app.models.ModelPacks.LFM.id]
+                ?: ai.localcompanion.app.models.PackStatus.NOT_DOWNLOADED
+            if (brainStatus != ai.localcompanion.app.models.PackStatus.READY) {
+                BrainPackBanner(
+                    status = brainStatus,
+                    progress = packUi.progress[ai.localcompanion.app.models.ModelPacks.LFM.id] ?: 0f,
+                    onDownload = { packUi.download(ai.localcompanion.app.models.ModelPacks.LFM) }
+                )
+                Spacer(Modifier.height(10.dp))
+            }
             ChatDock(
                 input = input,
                 onInputChange = { input = it },
@@ -128,6 +139,44 @@ fun StageScreen(
                 }
             )
             Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** Shown above the dock until her brain pack is on the phone. */
+@Composable
+private fun BrainPackBanner(
+    status: ai.localcompanion.app.models.PackStatus,
+    progress: Float,
+    onDownload: () -> Unit
+) {
+    Surface(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        shadowElevation = 6.dp
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (status == ai.localcompanion.app.models.PackStatus.DOWNLOADING)
+                        "Downloading her brain… ${(progress * 100).toInt()}%"
+                    else
+                        "Her brain (~731 MB) isn't on this phone yet",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (status == ai.localcompanion.app.models.PackStatus.NOT_DOWNLOADED) {
+                    androidx.compose.material3.Button(onClick = onDownload) { Text("Download") }
+                }
+            }
+            if (status == ai.localcompanion.app.models.PackStatus.DOWNLOADING) {
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
