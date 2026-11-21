@@ -63,6 +63,13 @@ object ModelPacks {
                 archive = true,
                 sizeBytes = 107_600_538L,
                 sha256 = "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2"
+            ),
+            PackFile(
+                url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+                fileName = "silero_vad.onnx",
+                archive = false,
+                sizeBytes = 643_854L,
+                sha256 = "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
             )
         )
     )

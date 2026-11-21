@@ -1,5 +1,9 @@
 package ai.localcompanion.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,25 +19,45 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import ai.localcompanion.app.chat.ChatEngine
+import ai.localcompanion.app.chat.EmotionTagParser
+import ai.localcompanion.app.models.ModelPacks
+import ai.localcompanion.app.models.PackManager
+import ai.localcompanion.app.models.PackStatus
+import ai.localcompanion.app.profile.PersonaPromptBuilder
+import ai.localcompanion.app.profile.ProfileStore
+import ai.localcompanion.app.profile.ThemeMode
+import ai.localcompanion.app.profile.UserProfile
+import ai.localcompanion.app.voice.SttEngine
+import ai.localcompanion.app.voice.TtsEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 data class ChatLine(val fromUser: Boolean, val text: String)
 
@@ -44,21 +68,143 @@ data class ChatLine(val fromUser: Boolean, val text: String)
  */
 @Composable
 fun StageScreen(
-    profile: ai.localcompanion.app.profile.UserProfile,
-    themeMode: ai.localcompanion.app.profile.ThemeMode,
-    onThemeModeChange: (ai.localcompanion.app.profile.ThemeMode) -> Unit,
+    profile: UserProfile,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit,
     onResetOnboarding: () -> Unit
 ) {
     val messages = remember { mutableStateListOf<ChatLine>() }
     var input by remember { mutableStateOf("") }
     var audioMode by remember { mutableStateOf(false) }
+    var listening by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var volume by remember { mutableStateOf(0.8f) }
-    val packUi = rememberPackUiState()
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val engine = remember { ai.localcompanion.app.chat.ChatEngine() }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
+
+    val packUi = rememberPackUiState()
+    val context = LocalContext.current
+    val engine = remember { ChatEngine() }
+    val tts = remember { TtsEngine() }
+    val stt = remember { SttEngine() }
+    val scope = rememberCoroutineScope()
+
+    DisposableEffect(Unit) {
+        onDispose {
+            tts.release()
+            stt.release()
+        }
+    }
+
+    fun voiceDir(): File = PackManager.packDir(context, ModelPacks.VOICE.id)
+    fun voiceReady(): Boolean = packUi.status[ModelPacks.VOICE.id] == PackStatus.READY
+
+    /** Speaks a finished reply if the voice pack is present. Best-effort. */
+    fun speak(text: String) {
+        if (!voiceReady() || text.isBlank()) return
+        tts.stop()
+        scope.launch {
+            try {
+                if (!tts.isLoaded) withContext(Dispatchers.IO) { tts.load(voiceDir()) }
+                tts.speak(text, volume)
+            } catch (e: Exception) {
+                // Voice is decoration on top of chat; never surface its errors.
+            }
+        }
+    }
+
+    fun sendMessage(rawText: String) {
+        val text = rawText.trim()
+        if (text.isEmpty() || busy) return
+        messages += ChatLine(true, text)
+        val replyIndex = messages.size
+        messages += ChatLine(false, "…")
+        busy = true
+        scope.launch {
+            try {
+                if (!engine.isLoaded) {
+                    val pack = ModelPacks.LFM
+                    val modelFile = File(PackManager.packDir(context, pack.id), pack.files.first().fileName)
+                    if (!modelFile.exists()) {
+                        messages[replyIndex] =
+                            ChatLine(false, "Her brain isn't downloaded yet — use the Download button above first.")
+                        return@launch
+                    }
+                    messages[replyIndex] = ChatLine(false, "Waking up…")
+                    engine.load(modelFile, PersonaPromptBuilder.buildSystemPrompt(profile))
+                    // Best-effort, once: expand her short personality description
+                    // into a full persona and persist it for future sessions.
+                    if (profile.personaPrompt.isBlank()) {
+                        engine.generateOnce(PersonaPromptBuilder.buildExpansionPrompt(profile))
+                            ?.let { expanded ->
+                                ProfileStore(context).save(profile.copy(personaPrompt = expanded))
+                            }
+                    }
+                    messages[replyIndex] = ChatLine(false, "…")
+                }
+                val raw = StringBuilder()
+                engine.generate(text).collect { chunk ->
+                    raw.append(chunk)
+                    messages[replyIndex] = ChatLine(false, raw.toString())
+                }
+                val parsed = EmotionTagParser.parse(raw.toString())
+                messages[replyIndex] = ChatLine(false, parsed.spokenText.ifBlank { "…" })
+                // parsed.emotion → Live2D expression hook (Cubism slice)
+                busy = false
+                speak(parsed.spokenText)
+            } catch (e: Exception) {
+                messages[replyIndex] = ChatLine(false, "⚠ ${e.message ?: "Her brain didn't respond"}")
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun startListening() {
+        scope.launch {
+            try {
+                if (!stt.isLoaded) withContext(Dispatchers.IO) { stt.load(voiceDir()) }
+                listening = true
+                val heard = stt.listenOnce()
+                listening = false
+                if (!heard.isNullOrBlank()) sendMessage(heard)
+            } catch (e: Exception) {
+                listening = false
+            }
+        }
+    }
+
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> if (granted) startListening() }
+
+    fun onMicTap() {
+        when {
+            listening -> {
+                stt.stop()
+                listening = false
+                audioMode = false
+                scope.launch(Dispatchers.IO) { stt.release() }
+            }
+            audioMode -> startListening()
+            else -> {
+                if (!voiceReady()) {
+                    messages += ChatLine(
+                        false,
+                        "Voice isn't downloaded yet — grab the voice pack in Settings → Models if you want to talk out loud."
+                    )
+                    return
+                }
+                audioMode = true
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    startListening()
+                } else {
+                    micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StageSurface(Modifier.fillMaxSize())
@@ -118,13 +264,12 @@ fun StageScreen(
                 }
             }
             Spacer(Modifier.height(10.dp))
-            val brainStatus = packUi.status[ai.localcompanion.app.models.ModelPacks.LFM.id]
-                ?: ai.localcompanion.app.models.PackStatus.NOT_DOWNLOADED
-            if (brainStatus != ai.localcompanion.app.models.PackStatus.READY) {
+            val brainStatus = packUi.status[ModelPacks.LFM.id] ?: PackStatus.NOT_DOWNLOADED
+            if (brainStatus != PackStatus.READY) {
                 BrainPackBanner(
                     status = brainStatus,
-                    progress = packUi.progress[ai.localcompanion.app.models.ModelPacks.LFM.id] ?: 0f,
-                    onDownload = { packUi.download(ai.localcompanion.app.models.ModelPacks.LFM) }
+                    progress = packUi.progress[ModelPacks.LFM.id] ?: 0f,
+                    onDownload = { packUi.download(ModelPacks.LFM) }
                 )
                 Spacer(Modifier.height(10.dp))
             }
@@ -132,58 +277,12 @@ fun StageScreen(
                 input = input,
                 onInputChange = { input = it },
                 audioMode = audioMode,
-                onToggleAudio = { audioMode = !audioMode },
+                listening = listening,
+                onToggleAudio = { onMicTap() },
                 onSend = {
-                    val text = input.trim()
-                    if (text.isNotEmpty() && !busy) {
-                        messages += ChatLine(true, text)
+                    if (!busy) {
+                        sendMessage(input)
                         input = ""
-                        val replyIndex = messages.size
-                        messages += ChatLine(false, "…")
-                        busy = true
-                        scope.launch {
-                            try {
-                                if (!engine.isLoaded) {
-                                    val pack = ai.localcompanion.app.models.ModelPacks.LFM
-                                    val modelFile = java.io.File(
-                                        ai.localcompanion.app.models.PackManager.packDir(context, pack.id),
-                                        pack.files.first().fileName
-                                    )
-                                    if (!modelFile.exists()) {
-                                        messages[replyIndex] = ChatLine(false, "Her brain isn't downloaded yet — use the Download button above first.")
-                                        return@launch
-                                    }
-                                    messages[replyIndex] = ChatLine(false, "Waking up…")
-                                    engine.load(
-                                        modelFile,
-                                        ai.localcompanion.app.profile.PersonaPromptBuilder.buildSystemPrompt(profile)
-                                    )
-                                    // Best-effort, once: expand her short personality
-                                    // description into a full persona for next sessions.
-                                    if (profile.personaPrompt.isBlank()) {
-                                        engine.generateOnce(
-                                            ai.localcompanion.app.profile.PersonaPromptBuilder.buildExpansionPrompt(profile)
-                                        )?.let { expanded ->
-                                            ai.localcompanion.app.profile.ProfileStore(context)
-                                                .save(profile.copy(personaPrompt = expanded))
-                                        }
-                                    }
-                                    messages[replyIndex] = ChatLine(false, "…")
-                                }
-                                val raw = StringBuilder()
-                                engine.generate(text).collect { chunk ->
-                                    raw.append(chunk)
-                                    messages[replyIndex] = ChatLine(false, raw.toString())
-                                }
-                                val parsed = ai.localcompanion.app.chat.EmotionTagParser.parse(raw.toString())
-                                messages[replyIndex] = ChatLine(false, parsed.spokenText.ifBlank { "…" })
-                                // parsed.emotion → Live2D expression hook (Cubism slice)
-                            } catch (e: Exception) {
-                                messages[replyIndex] = ChatLine(false, "⚠ ${e.message ?: "Her brain didn't respond"}")
-                            } finally {
-                                busy = false
-                            }
-                        }
                     }
                 }
             )
@@ -194,11 +293,7 @@ fun StageScreen(
 
 /** Shown above the dock until her brain pack is on the phone. */
 @Composable
-private fun BrainPackBanner(
-    status: ai.localcompanion.app.models.PackStatus,
-    progress: Float,
-    onDownload: () -> Unit
-) {
+private fun BrainPackBanner(status: PackStatus, progress: Float, onDownload: () -> Unit) {
     Surface(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         shape = RoundedCornerShape(16.dp),
@@ -208,23 +303,20 @@ private fun BrainPackBanner(
         Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (status == ai.localcompanion.app.models.PackStatus.DOWNLOADING)
+                    if (status == PackStatus.DOWNLOADING)
                         "Downloading her brain… ${(progress * 100).toInt()}%"
                     else
                         "Her brain (~731 MB) isn't on this phone yet",
                     Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                if (status == ai.localcompanion.app.models.PackStatus.NOT_DOWNLOADED) {
-                    androidx.compose.material3.Button(onClick = onDownload) { Text("Download") }
+                if (status == PackStatus.NOT_DOWNLOADED) {
+                    Button(onClick = onDownload) { Text("Download") }
                 }
             }
-            if (status == ai.localcompanion.app.models.PackStatus.DOWNLOADING) {
+            if (status == PackStatus.DOWNLOADING) {
                 Spacer(Modifier.height(8.dp))
-                androidx.compose.material3.LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -244,12 +336,19 @@ private fun StageSurface(modifier: Modifier = Modifier) {
 
 @Composable
 private fun ChatBubble(line: ChatLine) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (line.fromUser) Arrangement.End else Arrangement.Start) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = if (line.fromUser) Arrangement.End else Arrangement.Start
+    ) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
         ) {
-            Text(line.text, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                line.text,
+                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
@@ -259,6 +358,7 @@ private fun ChatDock(
     input: String,
     onInputChange: (String) -> Unit,
     audioMode: Boolean,
+    listening: Boolean,
     onToggleAudio: () -> Unit,
     onSend: () -> Unit
 ) {
@@ -269,10 +369,15 @@ private fun ChatDock(
         shadowElevation = 6.dp
     ) {
         Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            // Mic toggle: ON loads the STT model; OFF unloads it (zero drain)
+            // Mic: entering audio mode loads the STT model; leaving unloads it
+            // (zero drain in text mode). Red while actually listening.
             Surface(
                 shape = CircleShape,
-                color = if (audioMode) MaterialTheme.colorScheme.primary else Color.Transparent
+                color = when {
+                    listening -> MaterialTheme.colorScheme.error
+                    audioMode -> MaterialTheme.colorScheme.primary
+                    else -> Color.Transparent
+                }
             ) {
                 IconButton(onClick = onToggleAudio) {
                     Text("🎙", style = MaterialTheme.typography.bodyLarge)
@@ -281,7 +386,7 @@ private fun ChatDock(
             TextField(
                 value = input,
                 onValueChange = onInputChange,
-                placeholder = { Text("Message her…") },
+                placeholder = { Text(if (listening) "Listening…" else "Message her…") },
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp)),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent,
