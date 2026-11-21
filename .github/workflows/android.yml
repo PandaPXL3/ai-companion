@@ -48,7 +48,7 @@ jobs:
       - name: Unit tests + debug APK
         run: |
           set -o pipefail
-          gradle --stacktrace testDebugUnitTest assembleDebug 2>&1 | tee build.log
+          gradle testDebugUnitTest assembleDebug 2>&1 | tee build.log
 
       # Job logs need a GitHub sign-in to read, annotations don't.
       # On failure, surface the interesting tail of the build log as
@@ -57,11 +57,21 @@ jobs:
         if: failure()
         run: |
           python3 - <<'PYEOF'
-          import pathlib
+          import pathlib, re
           p = pathlib.Path("build.log")
           lines = p.read_text(errors="replace").splitlines() if p.exists() else ["(no build.log)"]
-          keep = [l for l in lines if l.strip()]
-          for l in keep[-50:]:
+          out = []
+          out += [l for l in lines if l.startswith("e: ")][:20]
+          for i, l in enumerate(lines):
+              if "What went wrong" in l:
+                  out += lines[i:i + 18]
+                  break
+          out += [l for l in lines if "FAILED" in l or "Caused by:" in l][:12]
+          seen = set(); final = []
+          for l in out:
+              if l.strip() and l not in seen:
+                  seen.add(l); final.append(l)
+          for l in final[:50]:
               msg = l.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:600]
               print(f"::error::{msg}")
           PYEOF
