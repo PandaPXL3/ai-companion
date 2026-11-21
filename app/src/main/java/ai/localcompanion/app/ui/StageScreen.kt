@@ -42,21 +42,63 @@ data class ChatLine(val fromUser: Boolean, val text: String)
  * mounts into [StageSurface] once the Cubism Core package is dropped in.
  */
 @Composable
-fun StageScreen() {
+fun StageScreen(
+    profile: ai.localcompanion.app.profile.UserProfile,
+    themeMode: ai.localcompanion.app.profile.ThemeMode,
+    onThemeModeChange: (ai.localcompanion.app.profile.ThemeMode) -> Unit,
+    onResetOnboarding: () -> Unit
+) {
     val messages = remember { mutableStateListOf<ChatLine>() }
     var input by remember { mutableStateOf("") }
     var audioMode by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var volume by remember { mutableStateOf(0.8f) }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StageSurface(Modifier.fillMaxSize())
 
-        // Top-right compact overlay actions
+        // Top bar: her name on the left, one clearly visible menu button on
+        // the right (the old faint overlay icons were nearly invisible).
         Row(
-            Modifier.align(Alignment.TopEnd).padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            OverlayCircleButton(label = "⚙", description = "Settings")
-            OverlayCircleButton(label = "▦", description = "Character")
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                shadowElevation = 4.dp
+            ) {
+                Text(
+                    profile.companionName,
+                    Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                shadowElevation = 6.dp
+            ) {
+                IconButton(onClick = { showSettings = true }, Modifier.size(52.dp)) {
+                    Text("☰", style = MaterialTheme.typography.headlineSmall)
+                }
+            }
+        }
+
+        if (showSettings) {
+            SettingsSheet(
+                profile = profile,
+                themeMode = themeMode,
+                onThemeModeChange = onThemeModeChange,
+                volume = volume,
+                onVolumeChange = { volume = it },
+                packStatus = emptyMap(),
+                packProgress = emptyMap(),
+                onDownloadPack = { /* TODO: wired by the downloader slice */ },
+                onResetOnboarding = { showSettings = false; onResetOnboarding() },
+                onDismiss = { showSettings = false }
+            )
         }
 
         // Conversation overlay: lower third only, never covering her face
@@ -110,15 +152,6 @@ private fun ChatBubble(line: ChatLine) {
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f)
         ) {
             Text(line.text, Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
-
-@Composable
-private fun OverlayCircleButton(label: String, description: String) {
-    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)) {
-        IconButton(onClick = { /* TODO */ }, Modifier.size(40.dp)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
         }
     }
 }
