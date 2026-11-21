@@ -11,7 +11,7 @@ data class ParsedReply(val emotion: Emotion, val spokenText: String)
  * The tag drives the Live2D expression/motion and is stripped before TTS.
  */
 object EmotionTagParser {
-    private val tagRegex = Regex("^\\[emo:\\s*([A-Za-z]+)\\s*]\\s*(.*)$", RegexOption.DOT_MATCHES_ALL)
+    private val tagRegex = Regex("^\\[emo:\\s*([A-Za-z]+)\\s*]\\s*(.*)$", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
 
     fun parse(raw: String): ParsedReply {
         val trimmed = raw.trim()
