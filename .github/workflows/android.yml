@@ -46,7 +46,25 @@ jobs:
           gradle-version: '8.9'
 
       - name: Unit tests + debug APK
-        run: gradle --stacktrace testDebugUnitTest assembleDebug
+        run: |
+          set -o pipefail
+          gradle --stacktrace testDebugUnitTest assembleDebug 2>&1 | tee build.log
+
+      # Job logs need a GitHub sign-in to read, annotations don't.
+      # On failure, surface the interesting tail of the build log as
+      # annotations so the failure is diagnosable from the public run page.
+      - name: Publish build log tail on failure
+        if: failure()
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib
+          p = pathlib.Path("build.log")
+          lines = p.read_text(errors="replace").splitlines() if p.exists() else ["(no build.log)"]
+          keep = [l for l in lines if l.strip()]
+          for l in keep[-50:]:
+              msg = l.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:600]
+              print(f"::error::{msg}")
+          PYEOF
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
