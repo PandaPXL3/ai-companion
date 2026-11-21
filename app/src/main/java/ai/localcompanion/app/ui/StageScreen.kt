@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 data class ChatLine(val fromUser: Boolean, val text: String)
 
@@ -54,6 +55,10 @@ fun StageScreen(
     var showSettings by remember { mutableStateOf(false) }
     var volume by remember { mutableStateOf(0.8f) }
     val packUi = rememberPackUiState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val engine = remember { ai.localcompanion.app.chat.ChatEngine() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         StageSurface(Modifier.fillMaxSize())
@@ -130,11 +135,55 @@ fun StageScreen(
                 onToggleAudio = { audioMode = !audioMode },
                 onSend = {
                     val text = input.trim()
-                    if (text.isNotEmpty()) {
+                    if (text.isNotEmpty() && !busy) {
                         messages += ChatLine(true, text)
                         input = ""
-                        // TODO: route through ChatEngine (LEAP LFM) once models are downloaded
+                        val replyIndex = messages.size
                         messages += ChatLine(false, "…")
+                        busy = true
+                        scope.launch {
+                            try {
+                                if (!engine.isLoaded) {
+                                    val pack = ai.localcompanion.app.models.ModelPacks.LFM
+                                    val modelFile = java.io.File(
+                                        ai.localcompanion.app.models.PackManager.packDir(context, pack.id),
+                                        pack.files.first().fileName
+                                    )
+                                    if (!modelFile.exists()) {
+                                        messages[replyIndex] = ChatLine(false, "Her brain isn't downloaded yet — use the Download button above first.")
+                                        return@launch
+                                    }
+                                    messages[replyIndex] = ChatLine(false, "Waking up…")
+                                    engine.load(
+                                        modelFile,
+                                        ai.localcompanion.app.profile.PersonaPromptBuilder.buildSystemPrompt(profile)
+                                    )
+                                    // Best-effort, once: expand her short personality
+                                    // description into a full persona for next sessions.
+                                    if (profile.personaPrompt.isBlank()) {
+                                        engine.generateOnce(
+                                            ai.localcompanion.app.profile.PersonaPromptBuilder.buildExpansionPrompt(profile)
+                                        )?.let { expanded ->
+                                            ai.localcompanion.app.profile.ProfileStore(context)
+                                                .save(profile.copy(personaPrompt = expanded))
+                                        }
+                                    }
+                                    messages[replyIndex] = ChatLine(false, "…")
+                                }
+                                val raw = StringBuilder()
+                                engine.generate(text).collect { chunk ->
+                                    raw.append(chunk)
+                                    messages[replyIndex] = ChatLine(false, raw.toString())
+                                }
+                                val parsed = ai.localcompanion.app.chat.EmotionTagParser.parse(raw.toString())
+                                messages[replyIndex] = ChatLine(false, parsed.spokenText.ifBlank { "…" })
+                                // parsed.emotion → Live2D expression hook (Cubism slice)
+                            } catch (e: Exception) {
+                                messages[replyIndex] = ChatLine(false, "⚠ ${e.message ?: "Her brain didn't respond"}")
+                            } finally {
+                                busy = false
+                            }
+                        }
                     }
                 }
             )
