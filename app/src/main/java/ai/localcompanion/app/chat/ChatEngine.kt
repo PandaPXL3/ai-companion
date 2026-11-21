@@ -52,14 +52,15 @@ class ChatEngine {
         return try {
             val oneShot = activeRunner.createConversation(null)
             val out = StringBuilder()
+            var failed = false
             oneShot.generateResponse(prompt).collect { response ->
                 when (response) {
                     is MessageResponse.Chunk -> out.append(response.text)
-                    is MessageResponse.Error -> return null
+                    is MessageResponse.Error -> failed = true
                     else -> Unit
                 }
             }
-            out.toString().trim().ifBlank { null }
+            if (failed) null else out.toString().trim().ifBlank { null }
         } catch (e: Exception) {
             null
         }
